@@ -14,7 +14,7 @@
   rel="stylesheet"
 >
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
 
 <style>
 
@@ -2530,44 +2530,80 @@ function getStatus(row,columns){
 
 async function loadData(){
 
+  const cacheKey = "zekra_cache_v1";
+  let hadCached = false;
+
+  // Try to render cached data immediately to avoid a long blank state
   try{
+    const cached = localStorage.getItem(cacheKey);
+    if(cached){
+      const parsed = JSON.parse(cached);
+      if(parsed){
+        hadCached = true;
+        try{
+          processData(parsed);
+          showToast("Showing cached responses");
+        }catch(e){
+          console.warn("Failed rendering cached data", e);
+        }
+      }
+    }
+  }catch(e){
+    console.warn("Could not read cache", e);
+  }
 
-    const response =
-      await fetch(API_URL,{
-        method:"GET",
-        cache:"no-store"
-      });
+  const controller = new AbortController();
+  const timeoutMs = 8000; // 8s
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  try{
+    const response = await fetch(API_URL, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
 
     if(!response.ok){
-
-      throw new Error(
-        "Failed to fetch data."
-      );
-
+      throw new Error("Failed to fetch data.");
     }
 
+    const data = await response.json();
 
-    const data =
-      await response.json();
-
+    try{
+      localStorage.setItem(cacheKey, JSON.stringify(data));
+    }catch(e){
+      // ignore storage errors
+      console.warn('Could not cache data', e);
+    }
 
     processData(data);
 
 
   }catch(error){
 
+    clearTimeout(timeoutId);
+
     console.error(error);
 
-    showErrorState();
+    const errMsg =
+      error && error.name === 'AbortError'
+        ? 'Request timed out.'
+        : (error && error.message) || 'Network error.';
 
-    showToast(
-      "Could not load RSVP responses."
-    );
+    if(hadCached){
+      showToast("Network unavailable — showing cached responses.");
+      // keep cached view
+    }else{
+      showErrorState(errMsg);
+      showToast("Could not load RSVP responses.");
+    }
 
   }
 
 }
+
 
 
 /* =========================================================
@@ -4621,7 +4657,7 @@ function downloadMessagesPDF(){
    ERROR STATE
 ========================================================= */
 
-function showErrorState(){
+function showErrorState(message){
 
   document.getElementById(
     "guestTableContainer"
@@ -4639,6 +4675,7 @@ function showErrorState(){
 
       <div class="empty-text">
         We couldn't load the RSVP responses.
+        ${message ? `<div style="margin-top:8px;font-size:11px;color:#a97460">${escapeHTML(message)}</div>` : ''}
       </div>
 
       <div style="margin-top:18px">
